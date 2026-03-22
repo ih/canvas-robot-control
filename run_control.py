@@ -44,7 +44,7 @@ def parse_args() -> ControlConfig:
 
     # Task
     p.add_argument("--task", type=str, required=True, help="Natural language task description")
-    p.add_argument("--scorer", type=str, default="moondream", help="VLM scorer: moondream, florence, qwen")
+    p.add_argument("--scorer", type=str, default="qwen", help="VLM scorer: qwen, moondream, florence")
 
     # World model
     p.add_argument("--checkpoint", type=str,

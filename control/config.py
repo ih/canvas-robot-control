@@ -28,7 +28,7 @@ class ControlConfig:
     camera_fps: int = 10
 
     # VLM scorer
-    scorer: str = "moondream"
+    scorer: str = "qwen"
     task_prompt: str = "On a scale of 0 to 10, how centered is the object in this image? Reply with only a number."
 
     # Control loop
