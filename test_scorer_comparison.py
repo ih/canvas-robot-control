@@ -63,11 +63,67 @@ def load_canvas_sample(
     return samples
 
 
+def load_curated_sample(
+    dataset_dir: str, n_per_action: int = 5, seed: int = 42
+) -> list[dict]:
+    """Load a balanced sample with n_per_action from each action type.
+
+    Samples evenly spaced across each action group to capture different
+    arm positions. Reading only the separator pixel for action classification.
+    """
+    dataset_path = Path(dataset_dir)
+    canvas_files = sorted(dataset_path.glob("canvas_*.png"))
+    if not canvas_files:
+        print(f"Error: No canvas_*.png files found in {dataset_dir}")
+        sys.exit(1)
+
+    # Classify by action (read only separator pixel for speed)
+    by_action = {1: [], 2: [], 3: []}
+    sep_col = FRAME_SIZE[1] + SEPARATOR_WIDTH // 2  # 240
+    for f in canvas_files:
+        img = Image.open(f)
+        pixel = img.getpixel((sep_col, 100))[:3]
+        action = COLOR_TO_ACTION.get(pixel, -1)
+        if action in by_action:
+            by_action[action].append(f)
+
+    action_names = {1: "move+", 2: "move-", 3: "hold"}
+    print(f"  Dataset actions: " + ", ".join(
+        f"{action_names[a]}={len(files)}" for a, files in by_action.items()
+    ))
+
+    # Sample evenly spaced from each action group
+    sampled_files = []
+    for action_id in [3, 1, 2]:  # hold first, then moves
+        pool = by_action[action_id]
+        n = min(n_per_action, len(pool))
+        indices = [int(i * len(pool) / n) for i in range(n)]
+        sampled_files.extend(pool[i] for i in indices)
+
+    # Load full images for sampled files
+    samples = []
+    pred_start = FRAME_SIZE[1] + SEPARATOR_WIDTH
+    pred_end = pred_start + FRAME_SIZE[1]
+    for f in sampled_files:
+        canvas = np.array(Image.open(f).convert("RGB"))
+        prediction_view = canvas[:FRAME_SIZE[0], pred_start:pred_end]
+        context_view = canvas[:FRAME_SIZE[0], :FRAME_SIZE[1]]
+        action = decode_action(canvas)
+        samples.append({
+            "filename": f.name,
+            "prediction_view": prediction_view,
+            "context_view": context_view,
+            "action": action,
+        })
+
+    return samples
+
+
 def format_prompt(task: str) -> str:
     """Wrap a task description into the standard VQA scoring prompt."""
     return (
         f"This image shows a robot's view. The task is: {task}. "
-        "On a scale of 0 to 10, how well does this image show the task being achieved? "
+        "On a scale of 1 to 100, how well does this image show the task being achieved? "
         "Reply with only a number."
     )
 
@@ -187,12 +243,12 @@ def img_to_base64(img: np.ndarray) -> str:
 
 
 def score_color(score: float) -> str:
-    """Return a CSS color for a score value (0-10 scale)."""
-    if score <= 2:
+    """Return a CSS color for a score value (1-100 scale)."""
+    if score <= 20:
         return "#e74c3c"
-    elif score <= 5:
+    elif score <= 50:
         return "#f39c12"
-    elif score <= 7:
+    elif score <= 70:
         return "#3498db"
     else:
         return "#27ae60"
@@ -236,7 +292,7 @@ def generate_html_report(
     <p><strong>{ag['scorers'][0]}</strong> vs <strong>{ag['scorers'][1]}</strong></p>
     <table>
         <tr><td>Pearson correlation</td><td><strong>{ag['pearson']:.3f}</strong></td></tr>
-        <tr><td>Spearman correlation</td><td><strong>{ag['spearman']:.3f if ag['spearman'] else 'N/A'}</strong></td></tr>
+        <tr><td>Spearman correlation</td><td><strong>{f"{ag['spearman']:.3f}" if ag['spearman'] is not None else 'N/A'}</strong></td></tr>
         <tr><td>Mean absolute difference</td><td><strong>{ag['mean_abs_diff']:.2f}</strong></td></tr>
     </table>""" if ag.get("pearson") is not None else ""
 
@@ -412,6 +468,10 @@ def main():
     p.add_argument("--output-dir", type=str, default="local/scorer_comparison")
     p.add_argument("--save-images", action="store_true")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--curated", action="store_true",
+                   help="Use curated balanced sample (hold vs move)")
+    p.add_argument("--n-per-action", type=int, default=5,
+                   help="Samples per action type when using --curated")
     args = p.parse_args()
 
     task_prompt = args.task_prompt or format_prompt(args.task)
@@ -419,14 +479,23 @@ def main():
 
     print(f"=== VLM Scorer Comparison ===")
     print(f"Dataset: {args.dataset_dir}")
-    print(f"Samples: {args.n_samples} (seed={args.seed})")
+    if args.curated:
+        print(f"Curated: {args.n_per_action} per action (seed={args.seed})")
+    else:
+        print(f"Samples: {args.n_samples} (seed={args.seed})")
     print(f"Prompt: {task_prompt}")
     print(f"Scorers: {', '.join(scorer_names)}")
     print(f"Device: {args.device}")
 
     # Load dataset
-    print(f"\nLoading {args.n_samples} canvas images...")
-    samples = load_canvas_sample(args.dataset_dir, args.n_samples, args.seed)
+    if args.curated:
+        print(f"\nLoading curated sample ({args.n_per_action} per action)...")
+    else:
+        print(f"\nLoading {args.n_samples} canvas images...")
+    if args.curated:
+        samples = load_curated_sample(args.dataset_dir, args.n_per_action, args.seed)
+    else:
+        samples = load_canvas_sample(args.dataset_dir, args.n_samples, args.seed)
     frames = [s["prediction_view"] for s in samples]
     print(f"  Loaded {len(samples)} images, frame shape: {frames[0].shape}")
 

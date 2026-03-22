@@ -102,7 +102,7 @@ class FlorenceScorer(VLMScorer):
             box_cx = (x1 + x2) / 2
             box_cy = (y1 + y2) / 2
             dist = ((box_cx - cx) ** 2 + (box_cy - cy) ** 2) ** 0.5
-            score = max(0.0, 10.0 * (1.0 - dist / max_dist))
+            score = max(0.0, 100.0 * (1.0 - dist / max_dist))
             best_score = max(best_score, score)
 
         # If no label matched but we have detections, use closest one
@@ -112,7 +112,7 @@ class FlorenceScorer(VLMScorer):
                 box_cx = (x1 + x2) / 2
                 box_cy = (y1 + y2) / 2
                 dist = ((box_cx - cx) ** 2 + (box_cy - cy) ** 2) ** 0.5
-                score = max(0.0, 10.0 * (1.0 - dist / max_dist))
+                score = max(0.0, 100.0 * (1.0 - dist / max_dist))
                 best_score = max(best_score, score)
 
         return best_score

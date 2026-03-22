@@ -14,7 +14,7 @@ class VLMScorer(ABC):
 
     @abstractmethod
     def score_frames(self, frames: list[np.ndarray], task_prompt: str) -> list[float]:
-        """Score each frame on a 0-10 scale based on the task prompt.
+        """Score each frame on a 1-100 scale based on the task prompt.
 
         Args:
             frames: List of RGB uint8 images (H, W, 3) to score.

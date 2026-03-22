@@ -29,12 +29,12 @@ class ControlConfig:
 
     # VLM scorer
     scorer: str = "qwen"
-    task_prompt: str = "On a scale of 0 to 10, how centered is the object in this image? Reply with only a number."
+    task_prompt: str = "On a scale of 1 to 100, how centered is the object in this image? Reply with only a number."
 
     # Control loop
     max_steps: int = 50
     settle_time: float = 0.5
-    success_threshold: float = 8.0
+    success_threshold: float = 80.0
     dry_run: bool = False
 
     # Logging

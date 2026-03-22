@@ -63,5 +63,5 @@ class MoondreamScorer(VLMScorer):
         match = re.search(r"(\d+(?:\.\d+)?)", response)
         if match:
             score = float(match.group(1))
-            return min(score, 10.0)
+            return min(score, 100.0)
         return 0.0

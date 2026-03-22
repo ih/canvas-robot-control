@@ -35,8 +35,14 @@ def get_scorer(name: str):
     elif name == "qwen":
         from scorers.qwen_vl import QwenVLScorer
         return QwenVLScorer()
+    elif name == "paligemma":
+        from scorers.paligemma import PaliGemmaScorer
+        return PaliGemmaScorer()
+    elif name == "smolvlm":
+        from scorers.smolvlm import SmolVLMScorer
+        return SmolVLMScorer()
     else:
-        raise ValueError(f"Unknown scorer: {name}. Choose from: moondream, florence, qwen")
+        raise ValueError(f"Unknown scorer: {name}. Choose from: qwen, paligemma, smolvlm, moondream, florence")
 
 
 def parse_args() -> ControlConfig:
@@ -44,7 +50,7 @@ def parse_args() -> ControlConfig:
 
     # Task
     p.add_argument("--task", type=str, required=True, help="Natural language task description")
-    p.add_argument("--scorer", type=str, default="qwen", help="VLM scorer: qwen, moondream, florence")
+    p.add_argument("--scorer", type=str, default="qwen", help="VLM scorer: qwen, paligemma, smolvlm, moondream, florence")
 
     # World model
     p.add_argument("--checkpoint", type=str,
@@ -66,7 +72,7 @@ def parse_args() -> ControlConfig:
     # Control loop
     p.add_argument("--max-steps", type=int, default=50)
     p.add_argument("--settle-time", type=float, default=0.5)
-    p.add_argument("--success-threshold", type=float, default=8.0)
+    p.add_argument("--success-threshold", type=float, default=80.0)
     p.add_argument("--dry-run", action="store_true", help="Run without hardware")
     p.add_argument("--save-frames", action="store_true", help="Save frames each step")
     p.add_argument("--output-dir", type=str, default="local/runs")
@@ -88,7 +94,7 @@ def parse_args() -> ControlConfig:
         scorer=args.scorer,
         task_prompt=(
             f"This image shows a robot's view. The task is: {args.task}. "
-            "On a scale of 0 to 10, how well does this image show the task being achieved? "
+            "On a scale of 1 to 100, how well does this image show the task being achieved? "
             "Reply with only a number."
         ),
         max_steps=args.max_steps,

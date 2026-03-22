@@ -1,4 +1,4 @@
-"""Qwen2-VL scorer — free-form VQA with stronger reasoning."""
+"""SmolVLM2 scorer — ultra-lightweight VLM (256M params)."""
 
 import re
 
@@ -8,22 +8,22 @@ from PIL import Image
 from .base import VLMScorer
 
 
-class QwenVLScorer(VLMScorer):
-    """Score frames using Qwen2-VL (~2B params).
+class SmolVLMScorer(VLMScorer):
+    """Score frames using SmolVLM2 (~256M params).
 
-    Uses free-form VQA for numeric scoring with stronger reasoning than moondream.
+    Extremely fast inference, instruction-tuned for following prompts.
     """
 
-    def __init__(self, model_id: str = "Qwen/Qwen2-VL-2B-Instruct"):
+    def __init__(self, model_id: str = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"):
         self.model_id = model_id
         self.model = None
         self.processor = None
 
     def load(self, device: str) -> None:
-        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from transformers import SmolVLMForConditionalGeneration, AutoProcessor
 
         self.processor = AutoProcessor.from_pretrained(self.model_id)
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+        self.model = SmolVLMForConditionalGeneration.from_pretrained(
             self.model_id,
             torch_dtype="auto",
             device_map={"": device},
@@ -41,7 +41,7 @@ class QwenVLScorer(VLMScorer):
         return scores
 
     def name(self) -> str:
-        return "qwen2-vl"
+        return "smolvlm2"
 
     def _score_single(self, frame: np.ndarray, task_prompt: str) -> float:
         import torch
@@ -69,7 +69,6 @@ class QwenVLScorer(VLMScorer):
         with torch.no_grad():
             generated_ids = self.model.generate(**inputs, max_new_tokens=32)
 
-        # Trim input tokens from output
         input_len = inputs["input_ids"].shape[1]
         output_ids = generated_ids[:, input_len:]
         response = self.processor.batch_decode(

@@ -1,4 +1,4 @@
-"""Qwen2-VL scorer — free-form VQA with stronger reasoning."""
+"""PaliGemma2 scorer — 3B VLM with 224px native input (mix fine-tuned)."""
 
 import re
 
@@ -8,22 +8,23 @@ from PIL import Image
 from .base import VLMScorer
 
 
-class QwenVLScorer(VLMScorer):
-    """Score frames using Qwen2-VL (~2B params).
+class PaliGemmaScorer(VLMScorer):
+    """Score frames using PaliGemma2 (3B params, 224px input).
 
-    Uses free-form VQA for numeric scoring with stronger reasoning than moondream.
+    Native 224px input matches workspace frame size exactly.
+    Mix fine-tuned variant with better instruction following.
     """
 
-    def __init__(self, model_id: str = "Qwen/Qwen2-VL-2B-Instruct"):
+    def __init__(self, model_id: str = "google/paligemma2-3b-mix-224"):
         self.model_id = model_id
         self.model = None
         self.processor = None
 
     def load(self, device: str) -> None:
-        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from transformers import PaliGemmaForConditionalGeneration, AutoProcessor
 
         self.processor = AutoProcessor.from_pretrained(self.model_id)
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+        self.model = PaliGemmaForConditionalGeneration.from_pretrained(
             self.model_id,
             torch_dtype="auto",
             device_map={"": device},
@@ -41,35 +42,24 @@ class QwenVLScorer(VLMScorer):
         return scores
 
     def name(self) -> str:
-        return "qwen2-vl"
+        return "paligemma2"
 
     def _score_single(self, frame: np.ndarray, task_prompt: str) -> float:
         import torch
 
         pil_img = Image.fromarray(frame)
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": pil_img},
-                    {"type": "text", "text": task_prompt},
-                ],
-            }
-        ]
-
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        # PaliGemma works best with short prefix-style prompts
+        # Extract the core task from the full prompt for better results
+        short_prompt = self._shorten_prompt(task_prompt)
         inputs = self.processor(
-            text=[text], images=[pil_img], return_tensors="pt", padding=True
+            images=pil_img, text=short_prompt, return_tensors="pt"
         )
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
 
         with torch.no_grad():
             generated_ids = self.model.generate(**inputs, max_new_tokens=32)
 
-        # Trim input tokens from output
         input_len = inputs["input_ids"].shape[1]
         output_ids = generated_ids[:, input_len:]
         response = self.processor.batch_decode(
@@ -77,6 +67,15 @@ class QwenVLScorer(VLMScorer):
         )[0]
 
         return self._parse_score(response)
+
+    @staticmethod
+    def _shorten_prompt(task_prompt: str) -> str:
+        """Convert verbose VQA prompt to PaliGemma-friendly short prefix."""
+        # Extract task from "The task is: X." pattern
+        import re as _re
+        match = _re.search(r"task is:\s*(.+?)\.", task_prompt)
+        task = match.group(1).strip() if match else "rate the image"
+        return f"on a scale of 1-100, rate how well this shows: {task}"
 
     @staticmethod
     def _parse_score(response: str) -> float:
