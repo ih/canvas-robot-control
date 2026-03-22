@@ -28,15 +28,21 @@ class FlorenceScorer(VLMScorer):
     def load(self, device: str) -> None:
         from transformers import AutoModelForCausalLM, AutoProcessor
 
-        self.processor = AutoProcessor.from_pretrained(
-            self.model_id, trust_remote_code=True
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            trust_remote_code=True,
-            torch_dtype="auto",
-            device_map={"": device},
-        )
+        try:
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_id, trust_remote_code=True
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                trust_remote_code=True,
+                torch_dtype="auto",
+                device_map={"": device},
+            )
+        except AttributeError as e:
+            raise RuntimeError(
+                f"Florence-2 custom code is incompatible with this transformers version. "
+                f"Use moondream or qwen scorer instead. Original error: {e}"
+            ) from e
         self.model.eval()
         self._device = device
 

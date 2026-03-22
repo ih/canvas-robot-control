@@ -20,17 +20,26 @@ class MoondreamScorer(VLMScorer):
         self.tokenizer = None
 
     def load(self, device: str) -> None:
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_id, trust_remote_code=True
         )
+        # Patch moondream's custom model class for transformers 5.x compat
+        # (HfMoondream lacks the `all_tied_weights_keys` dict added in v5)
+        model_cls = get_class_from_dynamic_module(
+            "hf_moondream.HfMoondream", self.model_id
+        )
+        if not hasattr(model_cls, "all_tied_weights_keys"):
+            model_cls.all_tied_weights_keys = {}
+
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_id,
             trust_remote_code=True,
-            torch_dtype="auto",
-            device_map={"": device},
-        )
+            dtype=torch.float16 if "cuda" in device else torch.float32,
+        ).to(device)
         self.model.eval()
 
     def score_frames(

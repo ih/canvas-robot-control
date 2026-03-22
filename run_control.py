@@ -86,7 +86,11 @@ def parse_args() -> ControlConfig:
         base_camera_index=args.base_camera,
         wrist_camera_index=args.wrist_camera,
         scorer=args.scorer,
-        task_prompt=args.task,
+        task_prompt=(
+            f"This image shows a robot's view. The task is: {args.task}. "
+            "On a scale of 0 to 10, how well does this image show the task being achieved? "
+            "Reply with only a number."
+        ),
         max_steps=args.max_steps,
         settle_time=args.settle_time,
         success_threshold=args.success_threshold,
