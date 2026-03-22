@@ -177,6 +177,161 @@ def print_report(summary: dict, task_prompt: str) -> None:
         print(f"  Mean absolute diff:  {ag['mean_abs_diff']:.2f}")
 
 
+def img_to_base64(img: np.ndarray) -> str:
+    """Encode an RGB numpy image as a base64 PNG data URI."""
+    import base64
+    import cv2
+    _, buf = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    b64 = base64.b64encode(buf).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
+def score_color(score: float) -> str:
+    """Return a CSS color for a score value (0-10 scale)."""
+    if score <= 2:
+        return "#e74c3c"
+    elif score <= 5:
+        return "#f39c12"
+    elif score <= 7:
+        return "#3498db"
+    else:
+        return "#27ae60"
+
+
+ACTION_NAMES = {0: "buffer", 1: "move+", 2: "move-", 3: "hold", -1: "unknown"}
+
+
+def generate_html_report(
+    samples: list[dict],
+    all_results: dict[str, dict],
+    summary: dict,
+    config: dict,
+    output_path: Path,
+) -> None:
+    """Generate an HTML report with embedded images and scores."""
+    scorer_names = list(all_results.keys())
+
+    # Build scorer summary rows
+    summary_rows = ""
+    for name in scorer_names:
+        s = summary["per_scorer"][name]
+        summary_rows += f"""
+        <tr>
+            <td><strong>{name}</strong></td>
+            <td>{s['mean']:.1f}</td>
+            <td>{s['std']:.2f}</td>
+            <td>{s['min']:.1f}</td>
+            <td>{s['max']:.1f}</td>
+            <td>{s['median']:.1f}</td>
+            <td>{s['per_frame_s']:.2f}s</td>
+            <td>{s['parse_failures']}/{s['n_frames']}</td>
+        </tr>"""
+
+    # Build agreement section
+    agreement_html = ""
+    if summary.get("agreement") and summary["agreement"]:
+        ag = summary["agreement"]
+        agreement_html = f"""
+    <h2>Cross-Scorer Agreement</h2>
+    <p><strong>{ag['scorers'][0]}</strong> vs <strong>{ag['scorers'][1]}</strong></p>
+    <table>
+        <tr><td>Pearson correlation</td><td><strong>{ag['pearson']:.3f}</strong></td></tr>
+        <tr><td>Spearman correlation</td><td><strong>{ag['spearman']:.3f if ag['spearman'] else 'N/A'}</strong></td></tr>
+        <tr><td>Mean absolute difference</td><td><strong>{ag['mean_abs_diff']:.2f}</strong></td></tr>
+    </table>""" if ag.get("pearson") is not None else ""
+
+    # Build per-image cards
+    cards_html = ""
+    for i, sample in enumerate(samples):
+        pred_b64 = img_to_base64(sample["prediction_view"])
+        ctx_b64 = img_to_base64(sample["context_view"])
+        action = ACTION_NAMES.get(sample["action"], "?")
+
+        score_cells = ""
+        for name in scorer_names:
+            score = all_results[name]["scores"][i]
+            color = score_color(score)
+            score_cells += f'<div class="score" style="border-left: 4px solid {color}"><span class="scorer-name">{name}</span><span class="score-val">{score:.1f}</span></div>'
+
+        cards_html += f"""
+    <div class="card">
+        <div class="card-header">
+            <span class="filename">{sample['filename']}</span>
+            <span class="action action-{action.replace('+','plus').replace('-','minus')}">{action}</span>
+        </div>
+        <div class="card-body">
+            <div class="images">
+                <div class="img-container">
+                    <img src="{ctx_b64}" alt="context">
+                    <div class="img-label">Context</div>
+                </div>
+                <div class="img-container">
+                    <img src="{pred_b64}" alt="prediction">
+                    <div class="img-label">Prediction (scored)</div>
+                </div>
+            </div>
+            <div class="scores">{score_cells}</div>
+        </div>
+    </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VLM Scorer Comparison Report</title>
+<style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; color: #333; }}
+    h1 {{ margin-bottom: 5px; }}
+    .meta {{ color: #666; font-size: 14px; margin-bottom: 20px; }}
+    .meta code {{ background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 13px; }}
+    table {{ border-collapse: collapse; margin: 10px 0 20px; }}
+    th, td {{ padding: 8px 14px; border: 1px solid #ddd; text-align: left; }}
+    th {{ background: #f0f0f0; }}
+    .card {{ background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); margin-bottom: 16px; overflow: hidden; }}
+    .card-header {{ padding: 10px 16px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }}
+    .filename {{ font-weight: 600; font-size: 14px; }}
+    .action {{ font-size: 12px; padding: 2px 8px; border-radius: 12px; font-weight: 600; }}
+    .action-moveplus {{ background: #d4edda; color: #155724; }}
+    .action-moveminus {{ background: #cce5ff; color: #004085; }}
+    .action-hold {{ background: #f8d7da; color: #721c24; }}
+    .card-body {{ padding: 16px; display: flex; gap: 20px; align-items: flex-start; }}
+    .images {{ display: flex; gap: 12px; }}
+    .img-container {{ text-align: center; }}
+    .img-container img {{ width: 224px; height: 224px; image-rendering: pixelated; border: 1px solid #ddd; border-radius: 4px; }}
+    .img-label {{ font-size: 11px; color: #888; margin-top: 4px; }}
+    .scores {{ display: flex; flex-direction: column; gap: 8px; min-width: 160px; }}
+    .score {{ display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; background: #fafafa; border-radius: 4px; }}
+    .scorer-name {{ font-size: 13px; color: #666; }}
+    .score-val {{ font-size: 20px; font-weight: 700; }}
+    h2 {{ margin-top: 30px; }}
+</style>
+</head>
+<body>
+    <h1>VLM Scorer Comparison</h1>
+    <div class="meta">
+        <p>Dataset: <code>{config['dataset_dir']}</code></p>
+        <p>Samples: {config['n_samples']} (seed={config['seed']})</p>
+        <p>Prompt: <code>{config['task_prompt']}</code></p>
+        <p>Scorers: {', '.join(scorer_names)}</p>
+    </div>
+
+    <h2>Summary</h2>
+    <table>
+        <tr><th>Scorer</th><th>Mean</th><th>Std</th><th>Min</th><th>Max</th><th>Median</th><th>Time/frame</th><th>Failures</th></tr>
+        {summary_rows}
+    </table>
+
+    {agreement_html}
+
+    <h2>Per-Image Results</h2>
+    {cards_html}
+</body>
+</html>"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
 def save_results(
     samples: list[dict],
     all_results: dict[str, dict],
@@ -235,6 +390,11 @@ def save_results(
                 cv2.cvtColor(sample["context_view"], cv2.COLOR_RGB2BGR),
             )
         print(f"Frame images saved to: {frames_dir}")
+
+    # Always generate HTML report
+    html_path = output_dir / "report.html"
+    generate_html_report(samples, all_results, summary, config, html_path)
+    print(f"HTML report: {html_path}")
 
 
 def main():

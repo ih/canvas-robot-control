@@ -9,3 +9,4 @@ build/
 .env
 *.log
 local/
+docs/scorer_comparison/
