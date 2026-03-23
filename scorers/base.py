@@ -24,6 +24,10 @@ class VLMScorer(ABC):
             List of float scores, one per frame. Higher = better.
         """
 
+    def describe_frame(self, frame: np.ndarray) -> str:
+        """Generate a text description of a frame. Optional for scorers."""
+        return ""
+
     @abstractmethod
     def name(self) -> str:
         """Return model identifier for logging."""

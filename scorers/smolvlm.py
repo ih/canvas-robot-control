@@ -77,6 +77,32 @@ class SmolVLMScorer(VLMScorer):
 
         return self._parse_score(response)
 
+    def describe_frame(self, frame: np.ndarray) -> str:
+        import torch
+
+        pil_img = Image.fromarray(frame)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_img},
+                    {"type": "text", "text": "Describe this image in one sentence."},
+                ],
+            }
+        ]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.processor(
+            text=[text], images=[pil_img], return_tensors="pt", padding=True
+        )
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+        with torch.no_grad():
+            generated_ids = self.model.generate(**inputs, max_new_tokens=100)
+        input_len = inputs["input_ids"].shape[1]
+        output_ids = generated_ids[:, input_len:]
+        return self.processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+
     @staticmethod
     def _parse_score(response: str) -> float:
         """Extract a numeric score from the VLM response."""

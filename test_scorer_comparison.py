@@ -139,20 +139,31 @@ def run_scorer_on_frames(
 
     # Score all frames
     scores = []
+    descriptions = []
     total_start = time.time()
     for i, frame in enumerate(frames):
         t0 = time.time()
         s = scorer.score_frames([frame], task_prompt)[0]
         elapsed = time.time() - t0
         scores.append(s)
+
+        # Get description
+        try:
+            desc = scorer.describe_frame(frame)
+        except Exception:
+            desc = ""
+        descriptions.append(desc)
+
         if verbose:
-            print(f"    Frame {i+1}/{len(frames)}: {s:.1f} ({elapsed:.2f}s)")
+            desc_short = desc[:60] + "..." if len(desc) > 60 else desc
+            print(f"    Frame {i+1}/{len(frames)}: {s:.1f} ({elapsed:.2f}s) | {desc_short}")
     total_s = time.time() - total_start
 
     parse_failures = sum(1 for s in scores if s == 0.0)
 
     return {
         "scores": scores,
+        "descriptions": descriptions,
         "warmup_s": warmup_s,
         "total_s": total_s,
         "per_frame_s": total_s / len(frames),
@@ -304,10 +315,14 @@ def generate_html_report(
         action = ACTION_NAMES.get(sample["action"], "?")
 
         score_cells = ""
+        desc_cells = ""
         for name in scorer_names:
             score = all_results[name]["scores"][i]
             color = score_color(score)
             score_cells += f'<div class="score" style="border-left: 4px solid {color}"><span class="scorer-name">{name}</span><span class="score-val">{score:.1f}</span></div>'
+            desc = all_results[name].get("descriptions", [""])[i] if i < len(all_results[name].get("descriptions", [])) else ""
+            if desc:
+                desc_cells += f'<div class="description"><span class="scorer-name">{name}:</span> {desc}</div>'
 
         cards_html += f"""
     <div class="card">
@@ -328,6 +343,7 @@ def generate_html_report(
             </div>
             <div class="scores">{score_cells}</div>
         </div>
+        {f'<div class="descriptions">{desc_cells}</div>' if desc_cells else ''}
     </div>"""
 
     html = f"""<!DOCTYPE html>
@@ -359,6 +375,9 @@ def generate_html_report(
     .score {{ display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; background: #fafafa; border-radius: 4px; }}
     .scorer-name {{ font-size: 13px; color: #666; }}
     .score-val {{ font-size: 20px; font-weight: 700; }}
+    .descriptions {{ padding: 10px 16px; border-top: 1px solid #eee; background: #fcfcfc; }}
+    .description {{ font-size: 13px; color: #555; margin-bottom: 6px; line-height: 1.4; }}
+    .description .scorer-name {{ font-weight: 600; color: #333; }}
     h2 {{ margin-top: 30px; }}
 </style>
 </head>
@@ -408,9 +427,13 @@ def save_results(
             "filename": sample["filename"],
             "action": sample["action"],
             "scores": {},
+            "descriptions": {},
         }
         for scorer_name, result in all_results.items():
             entry["scores"][scorer_name] = result["scores"][i]
+            descs = result.get("descriptions", [])
+            if i < len(descs) and descs[i]:
+                entry["descriptions"][scorer_name] = descs[i]
         per_image.append(entry)
 
     output = {

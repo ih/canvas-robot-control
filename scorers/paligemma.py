@@ -68,6 +68,20 @@ class PaliGemmaScorer(VLMScorer):
 
         return self._parse_score(response)
 
+    def describe_frame(self, frame: np.ndarray) -> str:
+        import torch
+
+        pil_img = Image.fromarray(frame)
+        inputs = self.processor(
+            images=pil_img, text="describe", return_tensors="pt"
+        )
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+        with torch.no_grad():
+            generated_ids = self.model.generate(**inputs, max_new_tokens=100)
+        input_len = inputs["input_ids"].shape[1]
+        output_ids = generated_ids[:, input_len:]
+        return self.processor.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+
     @staticmethod
     def _shorten_prompt(task_prompt: str) -> str:
         """Convert verbose VQA prompt to PaliGemma-friendly short prefix."""
