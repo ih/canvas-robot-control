@@ -29,6 +29,8 @@ class ControlConfig:
 
     # VLM scorer
     scorer: str = "qwen"
+    prompt_style: str = "comparative"  # "comparative" or "score"
+    prediction_depth: int = 1  # chained prediction steps
     task_prompt: str = "On a scale of 1 to 100, how centered is the object in this image? Reply with only a number."
 
     # Control loop

@@ -24,7 +24,7 @@ from control.world_model import WorldModelPredictor
 from control.robot_interface import RobotInterface, DryRunRobotInterface, JOINTS
 
 
-def get_scorer(name: str):
+def get_scorer(name: str, prompt_style: str = "comparative"):
     """Get a VLM scorer by name."""
     if name == "moondream":
         from scorers.moondream import MoondreamScorer
@@ -41,8 +41,14 @@ def get_scorer(name: str):
     elif name == "smolvlm":
         from scorers.smolvlm import SmolVLMScorer
         return SmolVLMScorer()
+    elif name == "gemma4":
+        from scorers.gemma4_comparative import Gemma4ComparativeScorer
+        return Gemma4ComparativeScorer(prompt_style=prompt_style)
+    elif name == "claude":
+        from scorers.claude_code_scorer import ClaudeCodeScorer
+        return ClaudeCodeScorer(prompt_style=prompt_style)
     else:
-        raise ValueError(f"Unknown scorer: {name}. Choose from: qwen, paligemma, smolvlm, moondream, florence")
+        raise ValueError(f"Unknown scorer: {name}. Choose from: qwen, paligemma, smolvlm, moondream, florence, gemma4, claude")
 
 
 def parse_args() -> ControlConfig:
@@ -69,6 +75,13 @@ def parse_args() -> ControlConfig:
     p.add_argument("--base-camera", type=int, default=1)
     p.add_argument("--wrist-camera", type=int, default=0)
 
+    # Scoring
+    p.add_argument("--prompt-style", type=str, default="comparative",
+                   choices=["comparative", "score"],
+                   help="VLM prompt style: comparative (pick best) or score (rate each)")
+    p.add_argument("--prediction-depth", type=int, default=1,
+                   help="Number of chained prediction steps (2 = predict 2 moves ahead)")
+
     # Control loop
     p.add_argument("--max-steps", type=int, default=50)
     p.add_argument("--settle-time", type=float, default=0.5)
@@ -92,6 +105,8 @@ def parse_args() -> ControlConfig:
         base_camera_index=args.base_camera,
         wrist_camera_index=args.wrist_camera,
         scorer=args.scorer,
+        prompt_style=args.prompt_style,
+        prediction_depth=args.prediction_depth,
         task_prompt=(
             f"This image shows a robot's view. The task is: {args.task}. "
             "On a scale of 1 to 100, how well does this image show the task being achieved? "
@@ -115,6 +130,12 @@ def control_loop(config: ControlConfig) -> None:
     """Run the MPC control loop."""
 
     # --- Initialize components ---
+    # For comparative scorer, pass the raw task — not the old "1 to 100" template
+    if config.scorer in ("gemma4", "claude"):
+        if "The task is:" in config.task_prompt:
+            raw_task = config.task_prompt.split("The task is:")[-1].split(".")[0].strip()
+            config.task_prompt = raw_task
+
     print(f"Task: {config.task_prompt}")
     print(f"Scorer: {config.scorer}")
     print(f"Dry run: {config.dry_run}")
@@ -132,9 +153,9 @@ def control_loop(config: ControlConfig) -> None:
 
     # VLM scorer
     print(f"Loading VLM scorer ({config.scorer})...")
-    scorer = get_scorer(config.scorer)
+    scorer = get_scorer(config.scorer, config.prompt_style)
     scorer.load(predictor.device)
-    print(f"  {scorer.name()} ready")
+    print(f"  {scorer.name()} ready (prompt_style={config.prompt_style})")
 
     # Robot
     if config.dry_run:
@@ -185,18 +206,25 @@ def control_loop(config: ControlConfig) -> None:
 
             # 2. Predict outcomes for each action
             t_predict = time.time()
-            predicted_views = predictor.predict_batch(
+            predicted_pairs = predictor.predict_batch(
                 context_frame,
                 motor_state,
                 CANDIDATE_ACTIONS,
                 step_size=config.step_size_degrees,
                 control_joint_idx=control_idx,
+                prediction_depth=config.prediction_depth,
             )
             predict_ms = (time.time() - t_predict) * 1000
 
             # 3. Score predictions
+            if hasattr(scorer, 'set_current_observation'):
+                scorer.set_current_observation(cameras["base"], cameras.get("wrist"))
             t_score = time.time()
-            scores = scorer.score_frames(predicted_views, config.task_prompt)
+            if config.scorer in ("gemma4", "claude"):
+                scores = scorer.score_frames(predicted_pairs, config.task_prompt)
+            else:
+                base_views = [base for base, _ in predicted_pairs]
+                scores = scorer.score_frames(base_views, config.task_prompt)
             score_ms = (time.time() - t_score) * 1000
 
             # 4. Select best action
@@ -230,12 +258,24 @@ def control_loop(config: ControlConfig) -> None:
             # Save frames if requested
             if run_dir is not None:
                 import cv2
-                for i, (action, view) in enumerate(zip(CANDIDATE_ACTIONS, predicted_views)):
-                    path = run_dir / f"step{step:03d}_{ACTION_NAMES[action]}.png"
-                    cv2.imwrite(str(path), cv2.cvtColor(view, cv2.COLOR_RGB2BGR))
-                # Also save the actual observation
-                obs_path = run_dir / f"step{step:03d}_observation.png"
-                cv2.imwrite(str(obs_path), cv2.cvtColor(cameras["base"], cv2.COLOR_RGB2BGR))
+                for action, (base, wrist) in zip(CANDIDATE_ACTIONS, predicted_pairs):
+                    cv2.imwrite(
+                        str(run_dir / f"step{step:03d}_{ACTION_NAMES[action]}_base.png"),
+                        cv2.cvtColor(base, cv2.COLOR_RGB2BGR),
+                    )
+                    cv2.imwrite(
+                        str(run_dir / f"step{step:03d}_{ACTION_NAMES[action]}_wrist.png"),
+                        cv2.cvtColor(wrist, cv2.COLOR_RGB2BGR),
+                    )
+                # Also save the actual observations
+                cv2.imwrite(
+                    str(run_dir / f"step{step:03d}_obs_base.png"),
+                    cv2.cvtColor(cameras["base"], cv2.COLOR_RGB2BGR),
+                )
+                cv2.imwrite(
+                    str(run_dir / f"step{step:03d}_obs_wrist.png"),
+                    cv2.cvtColor(cameras["wrist"], cv2.COLOR_RGB2BGR),
+                )
 
             # 5. Execute
             robot.execute_action(best_action)

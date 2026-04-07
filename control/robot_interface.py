@@ -25,7 +25,11 @@ JOINTS = [
 
 
 def _apply_windows_camera_patches():
-    """Disable background read thread on Windows DSHOW — threading issues."""
+    """Disable background read thread on Windows DSHOW — threading issues.
+
+    Also replaces read() with grab()/retrieve() to avoid cross-contamination
+    when multiple DSHOW cameras are open simultaneously.
+    """
     if platform.system() != "Windows":
         return
 
@@ -72,8 +76,8 @@ class RobotInterface:
         joint_max: float = 60.0,
         base_camera_index: int = 1,
         wrist_camera_index: int = 0,
-        camera_width: int = 640,
-        camera_height: int = 480,
+        camera_width: int = 320,
+        camera_height: int = 240,
         camera_fps: int = 10,
     ):
         self.port = port
@@ -117,13 +121,19 @@ class RobotInterface:
             - cameras_dict: {"base": (H,W,3), "wrist": (H,W,3)} RGB uint8
             - motor_positions: (6,) float array of joint positions
         """
-        # Read cameras
-        base_frame = self.base_camera.async_read()
-        wrist_frame = self.wrist_camera.async_read()
+        # DSHOW multi-camera fix: grab() both first, then retrieve().
+        # Using read() (grab+retrieve) sequentially causes the second
+        # camera to return the first camera's frame.
+        # Flush stale buffers with extra grabs before the real capture.
+        for _ in range(3):
+            self.base_camera.videocapture.grab()
+            self.wrist_camera.videocapture.grab()
+        _, base_raw = self.base_camera.videocapture.retrieve()
+        _, wrist_raw = self.wrist_camera.videocapture.retrieve()
 
-        # Convert BGR -> RGB
-        base_rgb = cv2.cvtColor(base_frame, cv2.COLOR_BGR2RGB)
-        wrist_rgb = cv2.cvtColor(wrist_frame, cv2.COLOR_BGR2RGB)
+        # _postprocess_image handles BGR->RGB conversion and rotation
+        base_rgb = self.base_camera._postprocess_image(base_raw)
+        wrist_rgb = self.wrist_camera._postprocess_image(wrist_raw)
 
         cameras = {"base": base_rgb, "wrist": wrist_rgb}
 
@@ -203,26 +213,39 @@ class RobotInterface:
         _apply_windows_camera_patches()
 
         from lerobot.cameras.opencv.camera_opencv import OpenCVCamera, OpenCVCameraConfig
+        from lerobot.cameras.configs import Cv2Backends
 
+        # Match dataset recording config: explicit DSHOW backend and 2s warmup
         base_cfg = OpenCVCameraConfig(
             index_or_path=self.base_camera_index,
             width=self.camera_width,
             height=self.camera_height,
             fps=self.camera_fps,
-            rotation=cv2.ROTATE_180,
+            rotation=180,
+            backend=Cv2Backends.DSHOW,
+            warmup_s=2,
         )
         self.base_camera = OpenCVCamera(base_cfg)
         self.base_camera.connect()
+        # Fix white balance — auto WB makes red appear blue
+        if hasattr(self.base_camera, 'videocapture'):
+            self.base_camera.videocapture.set(cv2.CAP_PROP_AUTO_WB, 0)
+            self.base_camera.videocapture.set(cv2.CAP_PROP_WB_TEMPERATURE, 6500)
 
         wrist_cfg = OpenCVCameraConfig(
             index_or_path=self.wrist_camera_index,
             width=self.camera_width,
             height=self.camera_height,
             fps=self.camera_fps,
-            rotation=cv2.ROTATE_180,
+            rotation=180,
+            backend=Cv2Backends.DSHOW,
+            warmup_s=2,
         )
         self.wrist_camera = OpenCVCamera(wrist_cfg)
         self.wrist_camera.connect()
+        if hasattr(self.wrist_camera, 'videocapture'):
+            self.wrist_camera.videocapture.set(cv2.CAP_PROP_AUTO_WB, 0)
+            self.wrist_camera.videocapture.set(cv2.CAP_PROP_WB_TEMPERATURE, 6500)
 
 
 class DryRunRobotInterface:

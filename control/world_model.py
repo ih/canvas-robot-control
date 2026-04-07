@@ -15,7 +15,7 @@ from .canvas_utils import (
     build_live_canvas,
     canvas_to_tensor,
     extract_predicted_frame,
-    extract_workspace_view,
+    extract_both_views,
     SEPARATOR_WIDTH,
     MOTOR_STRIP_HEIGHT,
 )
@@ -114,39 +114,27 @@ class WorldModelPredictor:
         self._strip_h = strip_h
 
     @torch.no_grad()
-    def predict_batch(
+    def _predict_one_step(
         self,
         context_frame: np.ndarray,
         motor_state: np.ndarray,
         actions: list[int],
-        step_size: float = 10.0,
-        control_joint_idx: int = 0,
-    ) -> list[np.ndarray]:
-        """Predict next frame for each candidate action.
-
-        Args:
-            context_frame: Stacked camera frame (448, 224, 3), uint8.
-            motor_state: Current joint positions, shape (num_joints,).
-            actions: List of discrete actions to evaluate (e.g., [1, 2, 3]).
-            step_size: Degrees per discrete step for the control joint.
-            control_joint_idx: Index of the joint being controlled.
-
-        Returns:
-            List of predicted workspace camera views, one per action.
-            Each is (224, 224, 3) uint8.
-        """
+        step_size: float,
+        control_joint_idx: int,
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """Single-step prediction. Returns (base, wrist, full_frame) per action."""
         from models.common import patchify, unpatchify
 
         # Build canvases for each action
         canvases = []
+        motor_nexts = []
         for action in actions:
-            # Compute expected next motor state
             motor_next = motor_state.copy()
             if action == 1:  # move positive
                 motor_next[control_joint_idx] += step_size
             elif action == 2:  # move negative
                 motor_next[control_joint_idx] -= step_size
-            # action 3 = hold, no change
+            motor_nexts.append(motor_next)
 
             canvas = build_live_canvas(
                 context_frame, action, motor_state, motor_next, self.meta
@@ -155,47 +143,92 @@ class WorldModelPredictor:
 
         # Stack into batch tensor
         tensors = [canvas_to_tensor(c, "neg_one_one") for c in canvases]
-        batch = torch.cat(tensors, dim=0).to(self.device)  # (B, 3, H, W)
+        batch = torch.cat(tensors, dim=0).to(self.device)
 
         B = batch.shape[0]
         batch_mask = self.patch_mask.expand(B, -1)
         ps = self._patch_size
         gh, gw = self._grid_h, self._grid_w
 
-        # Start from noise in last frame region
         target_patches = patchify(batch, ps)
-        noisy_patches = target_patches.clone()
-        noisy_patches[batch_mask] = torch.randn_like(noisy_patches[batch_mask])
-        current = unpatchify(noisy_patches, ps, gh, gw)
+        current_patches = target_patches.clone()
+        current_patches[batch_mask] = torch.randn_like(current_patches[batch_mask])
 
-        # DDIM denoising
         step_sz = self.noise_scheduler.num_train_timesteps // self.num_inference_steps
         timesteps = list(
             range(self.noise_scheduler.num_train_timesteps - 1, -1, -step_sz)
         )
 
         for t in timesteps:
+            current = unpatchify(current_patches, ps, gh, gw)
             t_batch = torch.full((B,), t, device=self.device, dtype=torch.long)
             pred = self.model(current, t_batch)
+            pred_x0 = pred[batch_mask]
 
-            current_patches = patchify(current, ps)
-            denoised_patches = current_patches.clone()
-            pred_last = pred[batch_mask]
-            current_last = current_patches[batch_mask]
-            stepped = self.noise_scheduler.step(pred_last, t, current_last)
-            denoised_patches[batch_mask] = stepped
-            current = unpatchify(denoised_patches, ps, gh, gw)
+            if t > 0:
+                t_prev = max(t - step_sz, 0)
+                noise = torch.randn_like(pred_x0)
+                alpha_bar_prev = self.noise_scheduler.alphas_cumprod.to(self.device)[t_prev]
+                current_patches[batch_mask] = (
+                    torch.sqrt(alpha_bar_prev) * pred_x0 +
+                    torch.sqrt(1.0 - alpha_bar_prev) * noise
+                )
+            else:
+                current_patches[batch_mask] = pred_x0
 
-        # Convert [-1,1] -> [0,1]
+        current_patches[~batch_mask] = target_patches[~batch_mask]
+        current = unpatchify(current_patches, ps, gh, gw)
         output = current.clamp(-1, 1) * 0.5 + 0.5
 
-        # Extract predicted workspace views
         results = []
         for i in range(B):
             frame = extract_predicted_frame(
                 output[i:i+1], self._frame_h, self._frame_w, self._strip_h,
             )
-            workspace = extract_workspace_view(frame)
-            results.append(workspace)
+            base, wrist = extract_both_views(frame)
+            results.append((base, wrist, frame, motor_nexts[i]))
 
         return results
+
+    @torch.no_grad()
+    def predict_batch(
+        self,
+        context_frame: np.ndarray,
+        motor_state: np.ndarray,
+        actions: list[int],
+        step_size: float = 10.0,
+        control_joint_idx: int = 0,
+        prediction_depth: int = 1,
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Predict next frame for each candidate action.
+
+        Args:
+            context_frame: Stacked camera frame (448, 224, 3), uint8.
+            motor_state: Current joint positions, shape (num_joints,).
+            actions: List of discrete actions to evaluate (e.g., [1, 2, 3]).
+            step_size: Degrees per discrete step for the control joint.
+            control_joint_idx: Index of the joint being controlled.
+            prediction_depth: Number of steps to chain. depth=2 means predict
+                two consecutive moves in the same direction.
+
+        Returns:
+            List of (base_view, wrist_view) pairs, one per action.
+            Each view is (224, 224, 3) uint8.
+        """
+        # First step
+        step_results = self._predict_one_step(
+            context_frame, motor_state, actions, step_size, control_joint_idx,
+        )
+
+        # Chain additional steps if depth > 1
+        for _ in range(prediction_depth - 1):
+            next_results = []
+            for i, (base, wrist, frame, motor_next) in enumerate(step_results):
+                # Use predicted frame as new context for next step
+                one_result = self._predict_one_step(
+                    frame, motor_next, [actions[i]], step_size, control_joint_idx,
+                )
+                next_results.append(one_result[0])
+            step_results = next_results
+
+        return [(base, wrist) for base, wrist, frame, motor_next in step_results]

@@ -76,9 +76,25 @@ C:/Projects/pythonenv-lerobot/Scripts/python run_control.py --task "center the r
 - `../canvas-world-model/` — World model training, evaluation, dataset creation
 - `../robotic-foundation-model-tests/` — SO-101 test scripts, recording, teleop (reference for hardware patterns)
 
+## Current Task
+
+**See `PLAN.md` for the active plan to implement next.**
+
+Summary: Improve VLM scoring by sending both camera views (base + wrist) to Gemma 4 E4B with clear labels. No randomization. Generate HTML reports for debugging.
+
 ## Status
 
-- All code written and syntax-checked
-- VLM dependencies (`transformers`, `einops`) not yet installed
-- Not yet tested (dry-run or hardware)
-- No initial git commit yet
+- Canvas world model working with **iterative x0 refinement** inference (fixed from broken DDIM)
+- Gemma 4 E4B comparative scorer added (`scorers/gemma4_comparative.py`) — 175ms inference
+- `run_control_with_report.py` generates HTML reports with images + VLM responses
+- Camera white balance issue: red objects appear blue (hardware WB, not fixable in software easily)
+- World model checkpoint: `../canvas-world-model/local/checkpoints/hold_exp/iter1/diff_finetune/best.pth` (sample prediction, 512d12)
+- `transformers>=5.5.0` required for Gemma 4
+- Camera rotation fix applied: `rotation=180` not `cv2.ROTATE_180`
+- WB fix attempted via `videocapture.set(CAP_PROP_WB_TEMPERATURE, 6500)` — doesn't stick reliably
+
+## Key Recent Files
+
+- `run_control_with_report.py` — Control loop with HTML report generation
+- `scorers/gemma4_comparative.py` — Gemma 4 E4B comparative scorer (current focus of improvement)
+- `PLAN.md` — Active implementation plan

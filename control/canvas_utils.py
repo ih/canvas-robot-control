@@ -223,3 +223,19 @@ def extract_workspace_view(predicted_frame: np.ndarray) -> np.ndarray:
     """
     h = predicted_frame.shape[0] // 2
     return predicted_frame[:h]
+
+
+def extract_both_views(predicted_frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Extract both camera views from a stacked predicted frame.
+
+    The frame has base camera on top and wrist camera on bottom,
+    each 224px tall.
+
+    Args:
+        predicted_frame: (448, 224, 3) uint8 array.
+
+    Returns:
+        Tuple of (base_view, wrist_view), each (224, 224, 3) uint8.
+    """
+    h = predicted_frame.shape[0] // 2
+    return predicted_frame[:h].copy(), predicted_frame[h:].copy()
