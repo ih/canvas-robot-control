@@ -151,8 +151,19 @@ class RobotInterface:
         Args:
             action_int: 1=move positive, 2=move negative, 3=hold.
         """
+        self.execute_action_on(action_int, self.control_joint)
+
+    def execute_action_on(self, action_int: int, joint: str) -> None:
+        """Same as execute_action but targets an arbitrary joint by name.
+
+        Uses the same [joint_min, joint_max] clamp as the configured control
+        joint. Intended for live-inference QA where the operator wants to
+        probe any joint, not just the one the world model was trained on.
+        """
+        if joint not in JOINTS:
+            raise ValueError(f"unknown joint {joint!r}; expected one of {JOINTS}")
         positions = self.bus.sync_read("Present_Position")
-        current = positions[self.control_joint]
+        current = positions[joint]
 
         if action_int == 1:
             target = current + self.step_size
@@ -161,13 +172,23 @@ class RobotInterface:
         else:
             target = current
 
-        # Clamp to joint limits
         target = max(self.joint_min, min(self.joint_max, target))
 
-        # Send all joints (freeze non-control joints at current positions)
         goal = {j: positions[j] for j in JOINTS}
-        goal[self.control_joint] = target
+        goal[joint] = target
         self.bus.sync_write("Goal_Position", goal)
+
+    def relax(self) -> None:
+        """Disable torque on all joints so the arm can be moved by hand."""
+        self.bus.disable_torque()
+
+    def lock(self) -> None:
+        """Re-enable torque holding the CURRENT position so the arm stays
+        where the operator left it. Read pos -> set as Goal_Position ->
+        enable torque (which also sets the Lock register)."""
+        positions = self.bus.sync_read("Present_Position", normalize=False)
+        self.bus.enable_torque()
+        self.bus.sync_write("Goal_Position", positions, normalize=False)
 
     def _connect_motors(self) -> None:
         """Connect to FeetechMotorsBus with calibration."""
@@ -284,7 +305,12 @@ class DryRunRobotInterface:
         return cameras, motor_array
 
     def execute_action(self, action_int: int) -> None:
-        current = self._positions[self.control_joint]
+        self.execute_action_on(action_int, self.control_joint)
+
+    def execute_action_on(self, action_int: int, joint: str) -> None:
+        if joint not in JOINTS:
+            raise ValueError(f"unknown joint {joint!r}; expected one of {JOINTS}")
+        current = self._positions[joint]
         if action_int == 1:
             target = current + self.step_size
         elif action_int == 2:
@@ -292,5 +318,11 @@ class DryRunRobotInterface:
         else:
             target = current
         target = max(self.joint_min, min(self.joint_max, target))
-        self._positions[self.control_joint] = target
-        print(f"[DRY RUN] {self.control_joint}: {current:.1f} -> {target:.1f} (action={action_int})")
+        self._positions[joint] = target
+        print(f"[DRY RUN] {joint}: {current:.1f} -> {target:.1f} (action={action_int})")
+
+    def relax(self) -> None:
+        print("[DRY RUN] relax (torque disabled)")
+
+    def lock(self) -> None:
+        print("[DRY RUN] lock (torque enabled at current position)")
