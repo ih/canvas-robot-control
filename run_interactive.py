@@ -71,7 +71,7 @@ def main():
     p = argparse.ArgumentParser(description="Interactive control loop")
     p.add_argument("--task", type=str, required=True)
     p.add_argument("--checkpoint", type=str,
-                   default="../canvas-world-model/local/checkpoints/hold_exp/iter1/diff_finetune/best.pth")
+                   default="../canvas-autonomous-learner/checkpoints/ft_20260416_123402/best.pth")
     p.add_argument("--cwm-path", type=str, default="../canvas-world-model")
     p.add_argument("--inference-steps", type=int, default=50)
     p.add_argument("--prediction-depth", type=int, default=2)

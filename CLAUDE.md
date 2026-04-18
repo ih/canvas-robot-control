@@ -22,7 +22,7 @@ A vision-only world model framework that trains generative models (GPT autoregre
 - **Dataset:** 1,500 canvases of shoulder_pan single-action + hold, from SO-101 arm
 - **Canvas format:** 464H x 480W — two 224x224 camera frames (base + wrist stacked vertically) separated by 32px colored action strip, plus 16px motor position strip at bottom
 - **Discrete actions:** 1=move+ (green), 2=move- (blue), 3=hold (red), 0=buffer (yellow)
-- **Checkpoints:** `../canvas-world-model/local/checkpoints/hold_exp/iter1/diff_finetune/best.pth`
+- **Checkpoints:** `../canvas-autonomous-learner/checkpoints/ft_20260416_123402/best.pth` (autonomous learner cycle 24, locked_val_mse 0.01125 against Arm A reference 0.0375)
 
 ## Architecture
 
@@ -88,7 +88,7 @@ Summary: Improve VLM scoring by sending both camera views (base + wrist) to Gemm
 - Gemma 4 E4B comparative scorer added (`scorers/gemma4_comparative.py`) — 175ms inference
 - `run_control_with_report.py` generates HTML reports with images + VLM responses
 - Camera white balance issue: red objects appear blue (hardware WB, not fixable in software easily)
-- World model checkpoint: `../canvas-world-model/local/checkpoints/hold_exp/iter1/diff_finetune/best.pth` (sample prediction, 512d12)
+- World model checkpoint: `../canvas-autonomous-learner/checkpoints/ft_20260416_123402/best.pth` (autonomous learner cycle 24 best, locked_val_mse 0.01125; prior offline checkpoint at `../canvas-world-model/local/checkpoints/hold_exp/iter1/diff_finetune/best.pth` still available)
 - `transformers>=5.5.0` required for Gemma 4
 - Camera rotation fix applied: `rotation=180` not `cv2.ROTATE_180`
 - WB fix attempted via `videocapture.set(CAP_PROP_WB_TEMPERATURE, 6500)` — doesn't stick reliably
