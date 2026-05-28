@@ -25,6 +25,60 @@ MOTOR_STRIP_HEIGHT = 16
 FRAME_SIZE = (224, 224)  # per-camera (H, W)
 PATCH_SIZE = 16
 
+# Number of SO-101 joints encoded in the per-joint action mask on the
+# right half of each action separator. Must match canvas-world-model's
+# _DEFAULT_NUM_JOINTS.
+NUM_JOINTS = 6
+
+
+def render_separator_tile(
+    action_int: int,
+    sep_width: int,
+    canvas_h: int,
+    active_joints_mask: np.ndarray | None = None,
+    num_joints: int = NUM_JOINTS,
+) -> np.ndarray:
+    """Render the action separator as a two-column tile.
+
+    Must match canvas-world-model/data/canvas_builder.py::_render_separator
+    pixel-for-pixel so the live inference path produces canvases the model
+    has actually been trained on.
+
+    Layout: (canvas_h, sep_width, 3) uint8, split vertically into two
+    equal-width columns.
+    - Left  `sep_width // 2` px: solid action color.
+    - Right remaining px: `num_joints` horizontal bands; each band is the
+      action color if that joint is acting, neutral gray otherwise.
+
+    The live path passes `active_joints_mask` explicitly since the
+    predictor knows exactly which joint it bumped — see
+    control.world_model._predict_one_step.
+    """
+    gray = (128, 128, 128)
+    action_color = ACTION_COLORS.get(action_int, gray)
+
+    tile = np.full((canvas_h, sep_width, 3), gray, dtype=np.uint8)
+    left_w = sep_width // 2
+    right_w = sep_width - left_w
+
+    tile[:, :left_w] = action_color
+
+    if active_joints_mask is None:
+        active_joints_mask = np.zeros(num_joints, dtype=bool)
+    active_joints_mask = np.asarray(active_joints_mask, dtype=bool)
+    if active_joints_mask.size < num_joints:
+        pad = np.zeros(num_joints - active_joints_mask.size, dtype=bool)
+        active_joints_mask = np.concatenate([active_joints_mask, pad])
+
+    right_x = left_w
+    for j in range(num_joints):
+        y_start = (j * canvas_h) // num_joints
+        y_end = canvas_h if j == num_joints - 1 else ((j + 1) * canvas_h) // num_joints
+        band_color = action_color if bool(active_joints_mask[j]) else gray
+        tile[y_start:y_end, right_x:right_x + right_w] = band_color
+
+    return tile
+
 
 def load_dataset_meta(meta_path: str) -> dict:
     """Load dataset metadata for motor normalization bounds."""
@@ -109,6 +163,7 @@ def build_live_canvas(
     motor_state_current: np.ndarray,
     motor_state_next: np.ndarray,
     meta: dict,
+    active_joints_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Build a canvas from a live context frame and a candidate action.
 
@@ -121,6 +176,9 @@ def build_live_canvas(
         motor_state_current: Current joint positions, shape (num_joints,).
         motor_state_next: Expected next joint positions, shape (num_joints,).
         meta: Dataset metadata dict with normalization bounds.
+        active_joints_mask: Optional 6-bool array marking which joints
+            are acting this step. When omitted, derived from the motor
+            delta just like the offline canvas builder does.
 
     Returns:
         Canvas as uint8 array, shape (canvas_h, canvas_w, 3).
@@ -146,11 +204,23 @@ def build_live_canvas(
     )
     canvas[frame_h:, :frame_w] = motor_strip_ctx
 
-    # Action separator
+    # Action separator — derive mask from motor delta if caller didn't
+    # supply one. Match the offline threshold (1.0 motor-state unit).
+    if active_joints_mask is None:
+        delta = np.abs(
+            np.asarray(motor_state_next, dtype=np.float32)
+            - np.asarray(motor_state_current, dtype=np.float32)
+        )
+        active_joints_mask = delta[:NUM_JOINTS] > 1.0
     sep_start = frame_w
     sep_end = frame_w + SEPARATOR_WIDTH
-    sep_color = ACTION_COLORS.get(action_int, (128, 128, 128))
-    canvas[:, sep_start:sep_end] = sep_color
+    sep_tile = render_separator_tile(
+        action_int=action_int,
+        sep_width=SEPARATOR_WIDTH,
+        canvas_h=total_h,
+        active_joints_mask=active_joints_mask,
+    )
+    canvas[:, sep_start:sep_end] = sep_tile
 
     # Prediction target (right side) — zeros, world model fills this
     # But we do need the motor strip for the expected next state

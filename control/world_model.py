@@ -128,16 +128,25 @@ class WorldModelPredictor:
         # Build canvases for each action
         canvases = []
         motor_nexts = []
+        # One-hot active-joints mask: only the joint this predictor was
+        # asked to bump is marked acting. For hold (action=3) nothing
+        # moves, so the mask is all-False.
+        n_joints = len(motor_state)
         for action in actions:
             motor_next = motor_state.copy()
+            mask = np.zeros(n_joints, dtype=bool)
             if action == 1:  # move positive
                 motor_next[control_joint_idx] += step_size
+                mask[control_joint_idx] = True
             elif action == 2:  # move negative
                 motor_next[control_joint_idx] -= step_size
+                mask[control_joint_idx] = True
+            # action == 3 (hold) → mask stays all-False
             motor_nexts.append(motor_next)
 
             canvas = build_live_canvas(
-                context_frame, action, motor_state, motor_next, self.meta
+                context_frame, action, motor_state, motor_next, self.meta,
+                active_joints_mask=mask,
             )
             canvases.append(canvas)
 
