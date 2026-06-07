@@ -1,6 +1,6 @@
 # Canvas Robot Control
 
-MPC-style robot control using a trained [canvas world model](https://github.com/irvinh/canvas-world-model) and VLM scoring. The world model predicts future camera frames for candidate actions, a VLM scores each prediction against a natural language task, and the highest-scoring action is executed.
+MPC-style robot control using a trained [canvas world model](https://github.com/ih/canvas-world-model) and VLM scoring. The world model predicts future camera frames for candidate actions, a VLM scores each prediction against a natural language task, and the highest-scoring action is executed.
 
 ## How It Works
 
